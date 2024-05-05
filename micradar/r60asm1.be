@@ -36,6 +36,18 @@ class r60asm1: micradar
 		0x03: "low",
 		0x04: "none",
 	}
+	static _sleep_state = {
+		0x00: "deep sleep",
+		0x01: "light sleep",
+		0x02: "awake",
+		0x03: "none",
+	}
+	static _sleep_rating = {
+		0x00: "none",
+		0x01: "high",
+		0x02: "medium",
+		0x03: "poor",
+	}
 
 	def publish(topic, payload)
 		mqtt.publish(format('tele/%s/R60ASM1/%s', self._topic, topic), payload)
@@ -49,12 +61,16 @@ class r60asm1: micradar
 		self.publish(topic, data.asstring())
 	end
 
-	def publish_map(topic, m, k)
+	def map_data(m, k)
 		var v = m.find(k)
 		if type(v) == 'nil'
 			v = format("0x%02x", k)
 		end
-		self.publish(topic, v)
+		return v
+	end
+
+	def publish_map(topic, m, k)
+		self.publish(topic, self.map_data(m, k))
 	end
 
 	def publish_human_activity(score)
@@ -89,6 +105,21 @@ class r60asm1: micradar
 		self.publish("HumanPosition", json.dump(p))
 	end
 
+	def publish_sleep_status_report(data)
+		var p = {
+			"Existing": data[0] ? true : false,
+			"SleepingState": self.map_data(self._sleep_state, data[1]),
+			"AverageBreathingRate": data[2],
+			"AverageHeartbeatRate": data[3],
+			"TurnoverTimes": data[4],
+			"LargeScaleBodyMovements": data[5],
+			"SmallScaleBodyMovements": data[6],
+			"ApneaTimes": data[7],
+			"_raw": data.asstring(),
+		}
+		self.publish("SleepStatusReport", json.dump(p))
+	end
+
 	static _report_queries = {
 		"07/07": [ 0x07, 0x87 ],
 
@@ -101,6 +132,8 @@ class r60asm1: micradar
 
 		"81/00": [ 0x81, 0x80 ], # breathing monitoring
 		"84/00": [ 0x84, 0x80 ], # sleep monitoring
+		"84/01": [ 0x84, 0x81 ], # in bed
+		"84/02": [ 0x84, 0x82 ], # sleep state
 		"84/12": [ 0x84, 0x92 ], # Unoccupied timing status report
 		"84/13": [ 0x84, 0x93 ], # Abnormal struggling state switch setting
 		"84/14": [ 0x84, 0x94 ], # Unoccupied timing status report switch setting
@@ -125,6 +158,9 @@ print('reroute', target, data)
 		"80/03",
 		"80/04",
 		"81/00",
+		"84/00",
+		"84/01",
+		"84/02",
 		"85/00",
 	]
 
@@ -196,7 +232,22 @@ print('after', s, data)
 		    / data -> self.publish_uint("BreathingRate", data[0]))
 
 		self.route.insert("84/00",
-		    / data -> self.publish_map("HeartMonitor", self._on_off, data[0]))
+		    / data -> self.publish_map("SleepMonitor", self._on_off, data[0]))
+		self.route.insert("84/01",
+		    / data -> self.publish_map("InBed", self._bool, data[0]))
+		self.route.insert("84/02",
+		    / data -> self.publish_map("SleepState", self._sleep_state, data[0]))
+		self.route.insert("84/03", / data ->
+		    self.publish_uint("AwakeTime", data.get(0, -2)))
+		self.route.insert("84/04", / data ->
+		    self.publish_uint("LightSleepTime", data.get(0, -2)))
+		self.route.insert("84/05", / data ->
+		    self.publish_uint("DeepSleepTime", data.get(0, -2)))
+		self.route.insert("80/0c", / data -> self.publish_sleep_status_report(data))
+		self.route.insert("84/06",
+		    / data -> self.publish_uint("SleepQualityScore", data[0]))
+		self.route.insert("84/10",
+		    / data -> self.publish_map("SleepQualityRating", self._sleep_rating, data[0]))
 
 		self.route.insert("85/00",
 		    / data -> self.publish_map("HeartMonitor", self._on_off, data[0]))
